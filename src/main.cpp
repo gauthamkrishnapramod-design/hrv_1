@@ -290,7 +290,7 @@ void updateOLED(int bpm, int o2Value, int status) {
         case 2: display.print("WARNING: HIGH ACCEL PULSE"); break;
         default:
             if (fingerOn && o2Value < 95 && o2Value > 0)
-                display.print("ALERT: HYPOXIA RISK");
+                display.print("ALERT: HYPOXIA");
             else
                 display.print("STATUS: OPERATIONAL");
             break;
