@@ -1,0 +1,157 @@
+// MAX30102 + MPU6050 integrated test for OLED
+#include <Arduino.h>
+#include <Wire.h>
+#include <Adafruit_GFX.h>
+#include <Adafruit_SSD1306.h>
+#include "MAX30105.h"
+
+#define SCREEN_WIDTH 128
+#define SCREEN_HEIGHT 64
+#define OLED_ADDR 0x3C
+
+Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, -1);
+MAX30105 sensor;
+
+uint8_t mpuAddr = 0; // detected address, 0 = not found
+
+uint8_t mpuReadRegister(uint8_t addr, uint8_t reg) {
+  Wire.beginTransmission(addr);
+  Wire.write(reg);
+  Wire.endTransmission(false);
+  Wire.requestFrom((int)addr, (int)1);
+  return Wire.available() ? Wire.read() : 0xFF;
+}
+
+uint8_t mpuReadBytes(uint8_t addr, uint8_t reg, uint8_t count, uint8_t *dest) {
+  Wire.beginTransmission(addr);
+  Wire.write(reg);
+  Wire.endTransmission(false);
+  Wire.requestFrom((int)addr, (int)count);
+  uint8_t i = 0;
+  while (Wire.available() && i < count) dest[i++] = Wire.read();
+  return i;
+}
+
+bool findAndInitMPU() {
+  const uint8_t addrs[] = {0x68, 0x69};
+  for (uint8_t i = 0; i < 2; ++i) {
+    uint8_t a = addrs[i];
+    uint8_t who = mpuReadRegister(a, 0x75);
+    if (who == 0x68) {
+      mpuAddr = a;
+      // wake up
+      Wire.beginTransmission(mpuAddr);
+      Wire.write(0x6B);
+      Wire.write(0x00);
+      Wire.endTransmission();
+      // set accel/gyro ranges (defaults are ok)
+      return true;
+    }
+  }
+  mpuAddr = 0;
+  return false;
+}
+
+void showLines(const char *l0, const char *l1, const char *l2, const char *l3) {
+  display.clearDisplay();
+  display.setTextSize(1);
+  display.setTextColor(SSD1306_WHITE);
+  display.setCursor(0, 0);
+  if (l0) display.println(l0);
+  if (l1) display.println(l1);
+  if (l2) display.println(l2);
+  if (l3) display.println(l3);
+  display.display();
+}
+
+void setup() {
+  Serial.begin(115200);
+  delay(200);
+
+  // Using pins from your provided code
+  Wire.begin(5, 6);
+  Wire.setClock(400000);
+
+  if (!display.begin(SSD1306_SWITCHCAPVCC, OLED_ADDR)) {
+    Serial.println("OLED init failed");
+    while (1) delay(1000);
+  }
+
+  display.clearDisplay();
+  display.display();
+
+  showLines("Starting...", "Initializing sensors", nullptr, nullptr);
+  delay(300);
+
+  // Init MAX30102
+  if (!sensor.begin(Wire, I2C_SPEED_STANDARD)) {
+    Serial.println("MAX30102 init failed");
+    showLines("MAX30102 Error", "Check wiring", nullptr, nullptr);
+    while (1) delay(1000);
+  }
+  sensor.setup();
+
+  // Init MPU6050
+  bool mpuOk = findAndInitMPU();
+  if (mpuOk) {
+    char buf[32];
+    snprintf(buf, sizeof(buf), "MPU found: 0x%02X", mpuAddr);
+    Serial.println(buf);
+    showLines("MPU6050 OK", buf, nullptr, nullptr);
+  } else {
+    Serial.println("MPU6050 not found");
+    showLines("MPU6050 NOT FOUND", "Continuing without MPU", nullptr, nullptr);
+  }
+  delay(800);
+}
+
+void loop() {
+  // Read IR from MAX30102
+  uint32_t ir = sensor.getIR();
+
+  // Read MPU if present
+  int16_t ax = 0, ay = 0, az = 0, gx = 0, gy = 0, gz = 0;
+  if (mpuAddr) {
+    uint8_t buf[14];
+    if (mpuReadBytes(mpuAddr, 0x3B, 14, buf) == 14) {
+      ax = (int16_t)((buf[0] << 8) | buf[1]);
+      ay = (int16_t)((buf[2] << 8) | buf[3]);
+      az = (int16_t)((buf[4] << 8) | buf[5]);
+      gx = (int16_t)((buf[8] << 8) | buf[9]);
+      gy = (int16_t)((buf[10] << 8) | buf[11]);
+      gz = (int16_t)((buf[12] << 8) | buf[13]);
+    } else {
+      // read failed, mark mpu as not present to avoid repeated failures
+      mpuAddr = 0;
+      Serial.println("MPU read failed; disabling MPU");
+    }
+  }
+
+  // Prepare OLED lines
+  char line0[32];
+  char line1[32];
+  char line2[32];
+  char line3[32];
+
+  snprintf(line0, sizeof(line0), "MAX30102 IR:%lu", (unsigned long)ir);
+  if (ir > 50000) snprintf(line1, sizeof(line1), "Finger: Detected");
+  else snprintf(line1, sizeof(line1), "Finger: Place");
+
+  if (mpuAddr) {
+    snprintf(line2, sizeof(line2), "Acc:%d,%d,%d", ax, ay, az);
+    snprintf(line3, sizeof(line3), "Gyro:%d,%d,%d", gx, gy, gz);
+  } else {
+    snprintf(line2, sizeof(line2), "MPU: Not present");
+    line3[0] = '\0';
+  }
+
+  showLines(line0, line1, line2, line3);
+
+  // Also print to Serial
+  Serial.println(line0);
+  Serial.println(line1);
+  Serial.println(line2);
+  if (mpuAddr) Serial.println(line3);
+
+  delay(300);
+}
